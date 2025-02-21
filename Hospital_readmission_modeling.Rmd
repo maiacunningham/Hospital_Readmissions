@@ -1,0 +1,169 @@
+---
+title: "Hospital Readmission"
+output: html_document
+date: "2025-02-21"
+---
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(caTools)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+
+setwd('/Users/maiacunningham/Library/CloudStorage/OneDrive-UW/Courersa Training/Data Analytics Practice')
+data <- read.csv("hospital_readmissions.csv")
+
+```
+
+
+```{r}
+# check variables for NA/summarize
+summary(data)
+sum(is.na(data)) # no NAs
+
+table(data$age)
+table(data$medical_specialty)
+table(data$diag_1)
+table(data$diag_2)
+table(data$diag_3)
+table(data$glucose_test)
+table(data$A1Ctest)
+table(data$diabetes_med)
+table(data$readmitted)
+
+data <- data %>%
+  mutate(
+    A1Ctest = case_when(
+      A1Ctest %in% c("no", "normal") ~ "no/normal",  # Combine "no" and "normal"
+      TRUE ~ A1Ctest  # Keep other responses as they are
+    ),
+    glucose_test = case_when(
+      glucose_test %in% c("no", "normal") ~ "no/normal",  # Combine "no" and "normal"
+      TRUE ~ glucose_test  # Keep other responses as they are
+    )
+  )
+
+```
+
+
+```{r}
+# clean up age variable
+data <- data %>%
+  mutate(age = str_replace_all(age, "[\\[\\]()]", ""))
+
+# Convert age categories to factor
+data$age <- as.factor(data$age)
+
+# Define a vector that maps age ranges to their average values
+age_mapping <- c(
+  "40-50" = 45,
+  "50-60" = 55,
+  "60-70" = 65,
+  "71-80" = 75,
+  "81-90" = 85,
+  "90-100" = 95
+)
+
+# Replace age categories with their corresponding averages using the mapping
+data$age <- age_mapping[data$age]
+
+```
+
+```{r}
+# exploratory data analysis (visualizations)
+
+# Plotting a bar plot of age categories
+ggplot(data, aes(x = age)) +
+  geom_bar(fill = "skyblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Age Categories", x = "Age Category", y = "Frequency") +
+  theme_minimal()
+
+# Create histogram for time in hospital
+ggplot(data, aes(x = time_in_hospital)) +
+  geom_histogram(binwidth = 1, fill = "red", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of Time in Hospital", x = "Time in Hospital (Days)", y = "Frequency") +
+  theme_minimal()
+
+# Create histogram for n_procedures
+ggplot(data, aes(x = n_procedures)) +
+  geom_histogram(binwidth = 1, fill = "skyblue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of Number of Procedures", x = "Number of Procedures", y = "Frequency") +
+  theme_minimal()
+
+# Create histogram for medications
+ggplot(data, aes(x = n_medications)) +
+  geom_histogram(binwidth = 1, fill = "purple", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of Number of Medications", x = "Number of Medications", y = "Frequency") +
+  theme_minimal()
+
+```
+
+
+```{r}
+# do some modeling (steps 1-7)
+
+# 1. one-hot encode categorical variables
+categorical_columns <- c('medical_specialty', 'diag_1', 'diag_2', 'diag_3', 'glucose_test', 'A1Ctest', 'change', 'diabetes_med')
+
+# Using model.matrix() to create dummy variables
+data_encoded <- data %>%
+  mutate(across(all_of(categorical_columns), as.factor)) %>%
+  bind_cols(model.matrix(~ medical_specialty + diag_1 + diag_2 + diag_3 + glucose_test + A1Ctest + change + diabetes_med - 1, data = data))
+
+# Drop the original categorical columns
+data_encoded <- data_encoded %>%
+  select(-all_of(categorical_columns))
+
+# 2. Standardize numerical features
+numerical_columns <- c('age', 'time_in_hospital', 'n_lab_procedures', 'n_procedures', 'n_medications', 'n_outpatient', 'n_inpatient', 'n_emergency')
+
+# Apply scaling to the numerical columns
+data_encoded[numerical_columns] <- scale(data_encoded[numerical_columns])
+
+# 3. Define target and features
+X <- data_encoded %>% select(-readmitted)
+y <- data_encoded$readmitted
+
+# 4. Split the data into training and test sets (70% train, 30% test)
+set.seed(42)
+split <- sample.split(y, SplitRatio = 0.7)
+X_train <- X[split == TRUE, ]
+X_test <- X[split == FALSE, ]
+y_train <- y[split == TRUE]
+y_test <- y[split == FALSE]
+
+# 5. Train a logistic regression model
+
+# clean readmitted variable
+data_encoded$readmitted <- ifelse(data_encoded$readmitted == 'yes', 1, 0)
+model <- glm(readmitted ~ ., data = data_encoded[split == TRUE, ], family = binomial)
+
+# 6. Make predictions
+y_pred_prob <- predict(model, X_test, type = "response")
+y_pred <- ifelse(y_pred_prob > 0.5, 'yes', 'no')
+
+# 7. Evaluate the model
+
+# Confusion matrix
+conf_matrix <- table(Predicted = y_pred, Actual = y_test)
+
+# Precision, Recall, F1 Score
+precision <- sum(y_pred == 'yes' & y_test == 'yes') / sum(y_pred == 'yes')
+recall <- sum(y_pred == 'yes' & y_test == 'yes') / sum(y_test == 'yes')
+f1 <- 2 * (precision * recall) / (precision + recall)
+
+# Print the results
+cat('Precision: ', precision, '\n')
+cat('Recall: ', recall, '\n')
+cat('F1 Score: ', f1, '\n')
+cat('Confusion Matrix: \n')
+print(conf_matrix)
+
+# Optional: Classification Report (can be generated using caret's confusionMatrix function)
+caret_conf <- confusionMatrix(as.factor(y_pred), as.factor(y_test))
+print(caret_conf)
+
+
+```
